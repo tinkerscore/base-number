@@ -4,8 +4,8 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { formatEther } from 'viem';
-import { WagmiProvider, useAccount, useConnect, useDisconnect, useSendTransaction, useBalance } from 'wagmi';
+import { formatEther, encodeFunctionData, stringToHex } from 'viem';
+import { WagmiProvider, useAccount, useConnect, useDisconnect, useWriteContract, useBalance, useSendTransaction } from 'wagmi';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { config as web3Config } from './config/web3';
 import { motion, AnimatePresence } from 'motion/react';
@@ -25,7 +25,7 @@ import {
   Command
 } from 'lucide-react';
 import { cn } from './lib/utils';
-import { getDailyNumberFact, type DailyNumberFact } from './services/geminiService';
+import { getDailyNumberFact, type DailyNumberFact } from './services/oracleService';
 
 const queryClient = new QueryClient();
 
@@ -304,6 +304,21 @@ const Header = () => {
   );
 };
 
+const CONTRACT_ADDRESS = ((import.meta as any).env?.VITE_CONTRACT_ADDRESS || '0xc1Cd207613f14419Edf6E6941F7d32ad6Af55942') as `0x${string}`;
+const BUILDER_CODE = "bc_i0u1lbai";
+const ABI = [
+  {
+    "inputs": [
+      { "internalType": "uint24", "name": "dayId", "type": "uint24" },
+      { "internalType": "uint256", "name": "revealedNumber", "type": "uint256" }
+    ],
+    "name": "sync",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+] as const;
+
 const Layout = () => {
   const { isConnected } = useAccount();
   const [fact, setFact] = useState<DailyNumberFact | null>(null);
@@ -315,14 +330,29 @@ const Layout = () => {
   }, []);
 
   const handleCheckIn = async () => {
-    if (!isConnected) return;
+    if (!isConnected || !fact) return;
     try {
-      const checkInData = "0x4b4c50" as `0x${string}`;
-      await sendTransaction({
-        to: '0x0000000000000000000000000000000000000000',
-        value: BigInt(0),
-        data: checkInData,
+      const today = new Date();
+      // YYYYMMDD format
+      const dayId = parseInt(`${today.getFullYear()}${(today.getMonth() + 1).toString().padStart(2, '0')}${today.getDate().toString().padStart(2, '0')}`);
+      
+      // 1. Encode the standard function call
+      const calldata = encodeFunctionData({
+        abi: ABI,
+        functionName: 'sync',
+        args: [dayId, BigInt(fact.number)],
       });
+
+      // 2. Convert builder code to hex and append it to the end of calldata
+      // Base Builder Codes are appended to the end of the data field
+      const builderHex = stringToHex(BUILDER_CODE).slice(2);
+      const finalData = `${calldata}${builderHex}` as `0x${string}`;
+      
+      await sendTransaction({
+        to: CONTRACT_ADDRESS,
+        data: finalData,
+      });
+      
       setCheckedIn(true);
     } catch (e) {
       console.error(e);
@@ -378,4 +408,3 @@ export default function App() {
     </WagmiProvider>
   );
 }
-
