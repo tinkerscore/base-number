@@ -5,7 +5,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { formatEther, encodeFunctionData, stringToHex } from 'viem';
-import { WagmiProvider, useAccount, useConnect, useDisconnect, useWriteContract, useBalance, useSendTransaction } from 'wagmi';
+import { WagmiProvider, useAccount, useConnect, useDisconnect, useWriteContract, useBalance, useSendTransaction, useWaitForTransactionReceipt } from 'wagmi';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { config as web3Config } from './config/web3';
 import { motion, AnimatePresence } from 'motion/react';
@@ -22,7 +22,10 @@ import {
   Compass,
   ArrowRight,
   Sparkles,
-  Command
+  Command,
+  Loader2,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 import { cn } from './lib/utils';
 
@@ -96,11 +99,13 @@ const HardwareStatus = () => (
   </div>
 );
 
-const OracleDisplay = ({ fact, checkedIn, onCheckIn, isPending }: { 
+const OracleDisplay = ({ fact, checkedIn, onCheckIn, isPending, txHash, isConfirming }: { 
   fact: DailyNumberFact | null, 
   checkedIn: boolean, 
   onCheckIn: () => void,
-  isPending: boolean 
+  isPending: boolean,
+  txHash?: string,
+  isConfirming: boolean
 }) => {
   if (!fact) {
     return (
@@ -189,11 +194,25 @@ const OracleDisplay = ({ fact, checkedIn, onCheckIn, isPending }: {
                         <button 
                           onClick={onCheckIn}
                           disabled={isPending}
-                          className="w-full flex items-center justify-center gap-3 py-4 bg-base hover:bg-base-dark text-white rounded-xl font-bold transition-all shadow-[0_0_30px_rgba(0,82,255,0.3)] active:scale-[0.98]"
+                          className="w-full flex items-center justify-center gap-3 py-4 bg-base hover:bg-base-dark text-white rounded-xl font-bold transition-all shadow-[0_0_30px_rgba(0,82,255,0.3)] active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed"
                         >
-                          {isPending ? <RefreshCcw className="animate-spin" /> : <Zap className="fill-current" size={18} />}
-                          {isPending ? 'Propagating Signal...' : 'Authorize Transaction'}
+                          {isPending ? <Loader2 className="animate-spin" size={18} /> : <Zap className="fill-current" size={18} />}
+                          <span className="uppercase tracking-widest text-xs">
+                            {isConfirming ? 'Confirming On-Chain...' : isPending ? 'Processing...' : 'Authorize Transaction'}
+                          </span>
                         </button>
+                        {txHash && isConfirming && (
+                          <div className="text-center">
+                            <a 
+                              href={`https://basescan.org/tx/${txHash}`} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="text-[10px] font-mono text-base hover:underline opacity-60"
+                            >
+                              View on Basescan
+                            </a>
+                          </div>
+                        )}
                       </div>
                     </motion.div>
                   ) : (
@@ -203,6 +222,10 @@ const OracleDisplay = ({ fact, checkedIn, onCheckIn, isPending }: {
                       animate={{ opacity: 1, scale: 1 }}
                       className="space-y-6"
                     >
+                      <div className="flex items-center gap-2 text-accent mb-2">
+                        <CheckCircle2 size={16} />
+                        <span className="text-[10px] font-mono uppercase tracking-[0.2em]">Connection Verified</span>
+                      </div>
                       <p className="text-xl md:text-2xl font-light text-white leading-relaxed">
                         {fact.fact}
                       </p>
@@ -354,17 +377,31 @@ const ABI = [
 ] as const;
 
 const Layout = () => {
-  const { isConnected } = useAccount();
+  const { isConnected, address } = useAccount();
   const [fact, setFact] = useState<DailyNumberFact | null>(null);
   const [checkedIn, setCheckedIn] = useState(false);
-  const { sendTransaction, isPending } = useSendTransaction();
+  const [txHash, setTxHash] = useState<`0x${string}` | undefined>();
+  const [txError, setTxError] = useState<string | null>(null);
+
+  const { sendTransactionAsync, isPending: isSendPending } = useSendTransaction();
+  
+  const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
+    hash: txHash,
+  });
 
   useEffect(() => {
     getDailyNumberFact(new Date().toISOString().split('T')[0]).then(setFact);
   }, []);
 
+  useEffect(() => {
+    if (isConfirmed) {
+      setCheckedIn(true);
+    }
+  }, [isConfirmed]);
+
   const handleCheckIn = async () => {
     if (!isConnected || !fact) return;
+    setTxError(null);
     try {
       const today = new Date();
       // YYYYMMDD format
@@ -382,16 +419,19 @@ const Layout = () => {
       const builderHex = stringToHex(BUILDER_CODE).slice(2);
       const finalData = `${calldata}${builderHex}` as `0x${string}`;
       
-      await sendTransaction({
+      const hash = await sendTransactionAsync({
         to: CONTRACT_ADDRESS,
         data: finalData,
       });
       
-      setCheckedIn(true);
-    } catch (e) {
+      setTxHash(hash);
+    } catch (e: any) {
       console.error(e);
+      setTxError(e.message || "Transaction failed to initiate");
     }
   };
+
+  const isPending = isSendPending || isConfirming;
 
   return (
     <main className="relative z-10 pt-32 min-h-screen">
@@ -401,7 +441,15 @@ const Layout = () => {
         checkedIn={checkedIn} 
         onCheckIn={handleCheckIn}
         isPending={isPending}
+        txHash={txHash}
+        isConfirming={isConfirming}
       />
+      {txError && (
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 glass-panel border-red-500/20 bg-red-500/5 px-6 py-3 rounded-full flex items-center gap-3 text-red-500 text-xs font-mono z-[200]">
+          <AlertCircle size={14} />
+          {txError}
+        </div>
+      )}
       
       {/* Decorative Navigation Rail */}
       <div className="fixed left-8 top-1/2 -translate-y-1/2 hidden xl:flex flex-col items-center gap-12 text-white/10">
