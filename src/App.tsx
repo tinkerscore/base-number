@@ -404,8 +404,9 @@ const Layout = () => {
     setTxError(null);
     try {
       const today = new Date();
-      // YYYYMMDD format
-      const dayId = parseInt(`${today.getFullYear()}${(today.getMonth() + 1).toString().padStart(2, '0')}${today.getDate().toString().padStart(2, '0')}`);
+      // YYMMDD format (e.g. 260418)
+      // This fits in uint24 (max 16,777,215) and matches existing verified contract.
+      const dayId = parseInt(`${today.getFullYear().toString().slice(-2)}${(today.getMonth() + 1).toString().padStart(2, '0')}${today.getDate().toString().padStart(2, '0')}`);
       
       // 1. Encode the standard function call
       const calldata = encodeFunctionData({
